@@ -165,7 +165,11 @@ test("reports sandbox facts for restricted background processes", { skip: !CAN_R
 
     assert.equal(process.status, "completed");
     assert.equal(process.exitCode, 0);
-    assert.equal(process.readOutput().delta, "guarded-background");
+    const output = process.readOutput();
+    const [stdout, stderr = ""] = output.delta.split("\n[stderr]\n", 2);
+    assert.equal(stdout, "guarded-background");
+    assert.equal(output.lossy, false);
+    if (stderr !== "") assert.match(stderr, /NO_COLOR[\s\S]*FORCE_COLOR/);
     assert.deepEqual(process.sandbox, {
       mode: "read-only",
       denied: false,
