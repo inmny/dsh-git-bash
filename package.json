@@ -2,6 +2,21 @@
   "name": "dsh-plugin-git-bash",
   "version": "0.1.0",
   "description": "Use Git for Windows Bash as the default DeepSeek Harness shell",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "plugin",
+    "git-bash",
+    "windows"
+  ],
+  "homepage": "https://github.com/inmny/dsh-git-bash#readme",
+  "bugs": {
+    "url": "https://github.com/inmny/dsh-git-bash/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/inmny/dsh-git-bash.git"
+  },
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -28,6 +43,9 @@
     "LICENSE"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=24"
   },
@@ -41,7 +59,9 @@
     "build": "pnpm run clean && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm run build && node --test",
-    "pack:check": "pnpm run build && npm pack --dry-run"
+    "pack:check": "npm pack --dry-run",
+    "prepack": "pnpm run build",
+    "prepublishOnly": "pnpm test"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
