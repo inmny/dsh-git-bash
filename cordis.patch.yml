@@ -1,0 +1,27 @@
+# Replace the platform-selected PowerShell stack with Git Bash on Windows.
+# On other platforms the stock Bash provider remains unchanged.
+
+- id: bash-sandbox
+  disabled: !!js process.platform === 'win32'
+
+- id: pwsh-sandbox
+  disabled: true
+
+- id: tool-bash
+  disabled: false
+
+- id: tool-pwsh
+  disabled: true
+
+- insert:
+    - id: git-bash-shell
+      name: 'dsh-plugin-git-bash'
+      disabled: !!js process.platform !== 'win32'
+      config:
+        timeoutMs: 60000
+
+    # Web agent presets contribute PowerShell from an ancestor scope. This
+    # adapter shadows that contribution with the global Git Bash-backed tool.
+    - id: git-bash-agent-shell
+      name: 'dsh-plugin-git-bash/agents'
+      disabled: !!js process.platform !== 'win32'
