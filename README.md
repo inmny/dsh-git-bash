@@ -8,6 +8,7 @@
 - 可通过 `DSH_GIT_BASH_PATH` 指定 `bash.exe`。
 - 前台命令、后台命令和 Web Agent preset 使用同一个 Git Bash executor。
 - `standard`、`code`、`cordis` 和 `minimal` preset 中的 PowerShell 工具会被 Git Bash 工具遮蔽。
+- Web client compatibility layer 会为 `run_code` 内的 nested Bash 调用恢复可展开的 terminal 详情，并自动换行过长的 command；output 仍保留终端横向滚动。
 - 插件不修改 DSH 安装目录；它作为 bundle layer 安装到指定 profile。
 
 ## 权限模式
@@ -63,7 +64,7 @@ dsh plugin --profile web add dsh-plugin-git-bash
 也可以安装指定版本：
 
 ```powershell
-dsh plugin --profile web add dsh-plugin-git-bash@0.2.0
+dsh plugin --profile web add dsh-plugin-git-bash@0.2.1
 ```
 
 DSH 会根据包内的 `dsh.bundle` 声明自动把插件加入 profile 的 bundle 列表。开发本地版本时可传入 checkout 路径：
@@ -79,6 +80,8 @@ printf 'shell=%s\nversion=%s\nmsystem=%s\n' "$BASH" "$BASH_VERSION" "$MSYSTEM"
 ```
 
 预期 `MSYSTEM` 为 `MINGW64` 或 `MINGW32`。可以分别切换到 `read-only` 和 `workspace-write` 验证权限边界；不再需要为了启动 Git Bash 切换到 `danger-full-access`。
+
+DSH `0.1.0-rc.6` 不会给 `run_code` 的 nested tool dispatch 附带顶层工具使用的 presentation view。插件随包提供的 Web client adapter 只为缺失 view 的 Bash 子调用重建 terminal view，因此这些行可以点击查看 command、cwd、stdout/stderr 和 exit status；普通顶层 Bash 和错误卡片仍由 DSH 原组件处理。
 
 ## 自定义 Git Bash 路径
 
