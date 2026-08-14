@@ -33,10 +33,22 @@ pnpm run pack:check
 
 ## 安装到 DSH
 
-例如安装到 Web profile：
+从 npm 安装到 Web profile：
 
 ```powershell
-dsh plugin --profile web add C:\path\to\dsh-plugins
+dsh plugin --profile web add dsh-plugin-git-bash
+```
+
+也可以安装指定版本：
+
+```powershell
+dsh plugin --profile web add dsh-plugin-git-bash@0.1.0
+```
+
+DSH 会根据包内的 `dsh.bundle` 声明自动把插件加入 profile 的 bundle 列表。开发本地版本时可传入 checkout 路径：
+
+```powershell
+dsh plugin --profile web add C:\path\to\dsh-git-bash
 ```
 
 安装后重启对应的 DSH profile，并新建会话。验证命令：
