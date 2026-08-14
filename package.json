@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-git-bash",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Use Git for Windows Bash as the default DSH shell with restricted-mode support",
   "keywords": [
     "deepseek-harness",
@@ -34,11 +34,13 @@
       "types": "./lib/discovery.d.ts",
       "default": "./lib/discovery.js"
     },
+    "./client": "./client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "files": [
     "lib",
+    "client.js",
     "native/bin/win32-x64/msys-token-guard.exe",
     "native/bin/win32-x64/msys-token-guard-hook.dll",
     "native/CMakeLists.txt",
@@ -59,6 +61,12 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-tool"
+      ]
     }
   },
   "scripts": {
