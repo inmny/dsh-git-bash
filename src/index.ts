@@ -1,5 +1,8 @@
 import type { Context } from "@deepseek-ai/cordis";
-import { LocalBashExecutor } from "@deepseek-ai/dsh-bash-local";
+import {
+  assertServiceableBashConfig,
+  LocalBashExecutor,
+} from "@deepseek-ai/dsh-bash-local";
 import type { Config as LocalBashConfig } from "@deepseek-ai/dsh-bash-local";
 import { SandboxUnavailableError } from "@deepseek-ai/dsh-sandbox";
 import type {
@@ -12,11 +15,12 @@ import type {
   SandboxPolicy,
 } from "@deepseek-ai/dsh-sandbox";
 import type {} from "@deepseek-ai/dsh-sandbox-policy";
-import type {
-  ShellExecRequest,
-  ShellExecSpec,
-  ShellProcess,
-  ShellRunResult,
+import {
+  SHELL_SETTINGS_NAMESPACE,
+  type ShellExecRequest,
+  type ShellExecSpec,
+  type ShellProcess,
+  type ShellRunResult,
 } from "@deepseek-ai/dsh-shell";
 import z from "@deepseek-ai/schemastery";
 import { accessSync, constants, statSync } from "node:fs";
@@ -26,8 +30,6 @@ import { resolveGitBashPath } from "./discovery.js";
 
 export { GIT_BASH_PATH_ENV, gitBashCandidates, resolveGitBashPath } from "./discovery.js";
 
-const DEFAULT_GRACE_MS = 3_000;
-const DEFAULT_MAX_SPILL_BYTES = 64 * 1024 * 1024;
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const GUARD_EXECUTABLE = resolve(
   PACKAGE_ROOT,
@@ -44,6 +46,8 @@ const GUARD_HOOK = resolve(
   "msys-token-guard-hook.dll",
 );
 const EXECUTABLE_SPAWN_CODES = new Set(["EACCES", "ENOENT"]);
+const GIT_BASH_EXECUTABLE_PATTERN =
+  /^(?:[A-Z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+[\\/]|%[^%]+%[\\/])(?:.*[\\/])?bash\.exe$/i;
 const GUARD_FAILURE_RULE: RunnerFailureRule = {
   allowedExitCodes: [125],
   fatalSignatures: ["msys-token-guard:"],
@@ -54,15 +58,59 @@ export interface Config extends LocalBashConfig {
   executable?: string;
 }
 
-export const Config: z<Config> = z.object({
-  executable: z.string(),
-  cwd: z.string(),
-  timeoutMs: z.number().default(120_000),
-  maxTimeoutMs: z.number().default(600_000),
-  maxOutputBytes: z.number().default(64_000),
-  maxSpillBytes: z.number().default(DEFAULT_MAX_SPILL_BYTES),
-  graceMs: z.number().default(DEFAULT_GRACE_MS),
-});
+const LOCAL_BASH_CONFIG = LocalBashExecutor.Config;
+
+type ResolvedGitBashConfig = Required<Omit<Config, "cwd">> & Pick<Config, "cwd">;
+
+interface GitBashSettingsService {
+  register(
+    namespace: typeof SHELL_SETTINGS_NAMESPACE,
+    schema: z<Config>,
+    options: { base: Config; validate: (value: Config) => void },
+  ): { get(): Config };
+}
+
+// Keep the field schema permissive enough to render a recovery card for a
+// legacy bad value; resolveConfiguredExecutable enforces it on new writes and use.
+export const Config = z.intersect([
+  LOCAL_BASH_CONFIG,
+  z.object({
+    executable: z.string()
+      .default("")
+      .role("path")
+      .description("Absolute path to Git for Windows bash.exe; blank uses automatic discovery."),
+  }),
+]) as z<Config>;
+
+function resolveConfiguredExecutable(config: Config): string | undefined {
+  const executable = config.executable?.trim();
+  if (!executable) return undefined;
+  if (!GIT_BASH_EXECUTABLE_PATTERN.test(executable)) {
+    throw new TypeError(
+      "git-bash: executable must be an absolute Windows path ending in bash.exe",
+    );
+  }
+  return resolveGitBashPath(executable);
+}
+
+function createSettingsValidator(): (config: Config) => void {
+  let initialSection = true;
+  return (config) => {
+    assertServiceableBashConfig(config);
+    if (initialSection) {
+      initialSection = false;
+      return;
+    }
+    resolveConfiguredExecutable(config);
+  };
+}
+
+function checkedCompositionConfig(config: Config): Config {
+  // Blank configuration intentionally defers auto-discovery so the settings
+  // card remains available on hosts that still need Git for Windows configured.
+  resolveConfiguredExecutable(config);
+  return config;
+}
 
 interface RunnerFailureMatch {
   detail: string;
@@ -173,15 +221,48 @@ export class GitBashExecutor extends LocalBashExecutor {
   static inject = ["subprocess", "sandbox", "sandboxPolicy"];
   static Config = Config;
 
-  readonly executable: string;
+  private configSource!: () => ResolvedGitBashConfig;
+  private executableCache: { configured: string; resolved: string } | undefined;
   private readonly mode: SandboxMode;
   private readonly processFacts = new Map<ShellProcess, ProcessFacts>();
 
   constructor(ctx: Context, config: Config) {
-    const { executable, ...localConfig } = config;
-    super(ctx, localConfig);
-    this.executable = resolveGitBashPath(executable);
+    // Keep the inherited process mechanics while replacing its fixed settings
+    // registration with the extended, executable-aware section below.
+    super(ctx.isolate("settings"), checkedCompositionConfig(config));
+    const entry = config as ResolvedGitBashConfig;
+    this.configSource = () => entry;
+    ctx.inject(["settings"], (settingsCtx) => {
+      const settings = settingsCtx.get("settings", true) as GitBashSettingsService;
+      const scope = settings.register(SHELL_SETTINGS_NAMESPACE, Config, {
+        base: entry,
+        validate: createSettingsValidator(),
+      });
+      this.configSource = () => scope.get() as ResolvedGitBashConfig;
+      settingsCtx.effect(
+        () => () => {
+          this.configSource = () => entry;
+        },
+        "git-bash: restore composition settings",
+      );
+    });
     this.mode = ctx.sandboxPolicy.defaultMode;
+  }
+
+  override get config(): ResolvedGitBashConfig {
+    return this.configSource();
+  }
+
+  get executable(): string {
+    const config = this.config as Config;
+    const configured = config.executable?.trim() ?? "";
+    if (this.executableCache?.configured === configured) {
+      return this.executableCache.resolved;
+    }
+
+    const resolved = resolveConfiguredExecutable(config) ?? resolveGitBashPath();
+    this.executableCache = { configured, resolved };
+    return resolved;
   }
 
   override get sandboxMode(): SandboxMode {

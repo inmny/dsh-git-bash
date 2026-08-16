@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, realpathSync, rmSync } from "node:fs";
+import { resolve as resolvePath, win32 } from "node:path";
 import test from "node:test";
 import { Context } from "@deepseek-ai/cordis";
+import { LocalBashExecutor } from "@deepseek-ai/dsh-bash-local";
 import { LocalSandboxProvider } from "@deepseek-ai/dsh-sandbox-local";
 import { LocalSubprocessRuntime } from "@deepseek-ai/dsh-subprocess-local";
-import { GitBashExecutor } from "../lib/index.js";
+import { Config, GitBashExecutor, resolveGitBashPath } from "../lib/index.js";
 
+const LOCAL_BASH_CONFIG = LocalBashExecutor.Config;
 const CAN_RUN_NATIVE_GUARD = process.platform === "win32" && process.arch === "x64";
 
 function createExecutor(mode = "danger-full-access") {
@@ -36,6 +39,136 @@ function createExecutor(mode = "danger-full-access") {
 async function dispose(ctx) {
   await ctx.fiber.dispose();
 }
+
+test("extends the shell settings schema with a Git Bash executable", () => {
+  assert.equal(LocalBashExecutor.Config, LOCAL_BASH_CONFIG);
+  assert.equal(Config().executable, "");
+  assert.equal(
+    Config({ executable: "D:\\Apps\\Git\\bin\\bash.exe" }).executable,
+    "D:\\Apps\\Git\\bin\\bash.exe",
+  );
+  assert.equal(
+    Config({ executable: "relative\\bash.exe" }).executable,
+    "relative\\bash.exe",
+  );
+  assert.equal(LocalBashExecutor.Config, LOCAL_BASH_CONFIG);
+});
+
+test("reads Git Bash executable changes from the live shell settings scope", async () => {
+  const installed = resolveGitBashPath();
+  const gitRoot = win32.dirname(win32.dirname(installed));
+  const binPath = win32.join(gitRoot, "bin", "bash.exe");
+  const usrBinPath = win32.join(gitRoot, "usr", "bin", "bash.exe");
+  const alternate = realpathSync.native(
+    installed.toLowerCase() === realpathSync.native(binPath).toLowerCase() ? usrBinPath : binPath,
+  );
+  const initialInvalid = "C:\\missing\\Git\\bin\\bash.exe";
+  let current;
+  let settingsScope;
+  let registrationCount = 0;
+  const ctx = new Context();
+  try {
+    await ctx.plugin({
+      apply(settingsCtx) {
+        settingsCtx.provide("settings", {
+          register(namespace, schema, options) {
+            registrationCount += 1;
+            assert.equal(String(namespace), "shell");
+            const listeners = new Set();
+            let section = { executable: initialInvalid };
+            current = schema({ ...options.base, ...section });
+            options.validate(current);
+            const commit = async (nextSection) => {
+              const next = schema({ ...options.base, ...nextSection });
+              options.validate(next);
+              const previous = current;
+              section = nextSection;
+              current = next;
+              for (const listener of listeners) listener(current, previous);
+            };
+            settingsScope = {
+              get: () => current,
+              watch(callback) {
+                listeners.add(callback);
+                return () => listeners.delete(callback);
+              },
+              update: (patch) => commit({ ...section, ...patch }),
+              replace: (replacement) => commit(replacement),
+            };
+            return settingsScope;
+          },
+        });
+      },
+    });
+
+    const workspaceRoot = process.cwd();
+    ctx.provide("sandboxPolicy", {
+      defaultMode: "danger-full-access",
+      workspaceRoot,
+      resolve: () => ({ mode: "danger-full-access", workspaceRoot }),
+      overrideOf: () => undefined,
+    });
+    new LocalSubprocessRuntime(ctx);
+    new LocalSandboxProvider(ctx, {
+      runnerCommand: [],
+      runnerFailureSignatures: [],
+      probeTimeoutMs: 10_000,
+    });
+    const executor = new GitBashExecutor(ctx, {
+      executable: "",
+      timeoutMs: 15_000,
+      maxTimeoutMs: 15_000,
+      maxOutputBytes: 64_000,
+      maxSpillBytes: 1024 * 1024,
+      graceMs: 1_000,
+    });
+    await new Promise(queueMicrotask);
+
+    assert.equal(LocalBashExecutor.Config, LOCAL_BASH_CONFIG);
+    assert.equal(registrationCount, 1);
+    assert.equal(current.executable, initialInvalid);
+    assert.equal(executor.config.executable, initialInvalid);
+    assert.throws(() => executor.executable, /does not exist or is not executable/);
+
+    await assert.rejects(
+      () => settingsScope.update({ executable: "C:\\also-missing\\bash.exe" }),
+      /does not exist or is not executable/,
+    );
+    assert.equal(current.executable, initialInvalid);
+
+    await assert.rejects(
+      () => settingsScope.update({ executable: process.execPath }),
+      /absolute Windows path ending in bash.exe/,
+    );
+    const relativeInstalled = win32.relative(process.cwd(), installed);
+    assert.equal(win32.isAbsolute(relativeInstalled), false);
+    await assert.rejects(
+      () => settingsScope.update({ executable: relativeInstalled }),
+      /absolute Windows path ending in bash.exe/,
+    );
+    assert.equal(current.executable, initialInvalid);
+
+    await settingsScope.update({ executable: alternate });
+    assert.equal(executor.config.executable, alternate);
+    assert.equal(executor.executable, alternate);
+  } finally {
+    await dispose(ctx);
+  }
+});
+
+test("keeps the settings repair path available when auto-discovery is unavailable", async () => {
+  const previous = process.env.DSH_GIT_BASH_PATH;
+  process.env.DSH_GIT_BASH_PATH = "C:\\missing\\Git\\bin\\bash.exe";
+  const { ctx, executor } = createExecutor();
+  try {
+    await new Promise(queueMicrotask);
+    assert.throws(() => executor.executable, /does not exist or is not executable/);
+  } finally {
+    if (previous === undefined) delete process.env.DSH_GIT_BASH_PATH;
+    else process.env.DSH_GIT_BASH_PATH = previous;
+    await dispose(ctx);
+  }
+});
 
 test("runs foreground commands directly in danger-full-access", async () => {
   const { ctx, executor } = createExecutor();

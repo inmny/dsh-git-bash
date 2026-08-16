@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-git-bash",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Use Git for Windows Bash as the default DSH shell with restricted-mode support",
   "keywords": [
     "deepseek-harness",
@@ -65,7 +65,14 @@
     "client": {
       "platform": "web",
       "inject": [
-        "@deepseek-ai/dsh-client-ui-tool"
+        "@deepseek-ai/dsh-client-ui-tool",
+        "@deepseek-ai/dsh-client-ui-settings-plugins",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-primitives",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-api-remotes"
       ]
     }
   },
