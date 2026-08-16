@@ -25,7 +25,7 @@ Web 界面中的 Bash 工具行可以展开查看 command、cwd、stdout/stderr 
 从 npm 安装固定版本到 Web profile：
 
 ```sh
-dsh plugin --profile web add dsh-plugin-git-bash@0.2.1
+dsh plugin --profile web add dsh-plugin-git-bash@0.3.0
 ```
 
 更新现有安装时使用同一条命令。安装完成后重启 `dsh web`，让 Host 和浏览器 client 同时加载新版本，然后新建会话。
@@ -52,21 +52,8 @@ dsh plugin --profile web add C:\path\to\dsh-git-bash
 DSH ACL runner -> msys-token-guard.exe -> bash.exe -> child processes
 ```
 
-Git for Windows 的 MSYS runtime 需要创建共享 mapping、signal pipe 等 IPC 对象，还会尝试重置 token default DACL。`msys-token-guard.exe` 和 companion hook 只处理这些兼容性要求：
-
-- 校验 guard 与 Bash 的 restricting SID 集合一致。
-- 要求 logon SID 已存在于 restricting SID 集合。
-- 为 MSYS IPC 使用的 default DACL 增加 logon SID。
-- 在恢复 Bash 和受 hook 传播的 child 前拒绝 `TOKEN_ADJUST_DEFAULT`。
-- 只把来自 `msys-2.0.dll` 的 `Administrators + GENERIC_ALL` IPC ACE 替换为当前 logon SID。
-- setup、DLL 注入或 token invariant 失败时终止 suspended child，并以 exit code `125` fail closed。
-
-外层 DSH sandbox 始终是权限边界。插件不会增加 user SID 到 restricting SID 集合，不会提权，不会创建 unrestricted broker，也不会使用 `CREATE_BREAKAWAY_FROM_JOB`。
-
 - `read-only` 可以启动 Git Bash，但不能写 workspace。
 - `workspace-write` 只能写 DSH 授权的 workspace 和 private temp。
-- Windows ACL backend 原有的 hard-link 限制不变，结果继续报告 `enforcement: partial`。
-- sandbox 初始化失败时不会退回未隔离执行。
 
 ### `danger-full-access`
 
@@ -74,14 +61,16 @@ Git for Windows 的 MSYS runtime 需要创建共享 mapping、signal pipe 等 IP
 
 ## 配置 Git Bash 路径
 
-插件会自动探测 Program Files、用户安装目录和 Scoop 中的 Git Bash。需要指定其他安装位置时，在启动 DSH 前设置 `DSH_GIT_BASH_PATH`：
+插件会自动探测 Program Files、用户安装目录和 Scoop 中的 Git Bash。Web GUI 中打开 `设置 -> 插件 -> 插件配置`，展开 `Git Bash` 卡片后可以直接输入 `bash.exe` 路径，或通过 `选择 Git 安装目录` 调用系统路径选择窗口。保存后，后续 Bash 命令会立即使用新路径；恢复默认值会回到 profile 配置或自动探测结果。
+
+无 GUI 场景可以在启动 DSH 前设置 `DSH_GIT_BASH_PATH`：
 
 ```powershell
 $env:DSH_GIT_BASH_PATH = 'D:\Apps\Git\bin\bash.exe'
 dsh web
 ```
 
-也可以在 profile 的 `cordis.patch.yml` 中为 provider 配置 `executable`：
+也可以直接在 profile 的 `cordis.patch.yml` 中为 provider 配置 `executable`：
 
 ```yaml
 - id: git-bash-shell
