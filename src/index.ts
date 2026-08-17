@@ -270,14 +270,21 @@ export class GitBashExecutor extends LocalBashExecutor {
   }
 
   override resolve(request: ShellExecRequest): ShellExecSpec {
+    const resolved = super.resolve(request);
     return {
-      ...super.resolve(request),
+      ...resolved,
+      env: {
+        ...(resolved.env ?? {}),
+        // Keep Git/MSYS2 Bash in the workspace directory instead of
+        // changing to $HOME on login-shell startup.
+        CHERE_INVOKING: "1",
+      },
       sandboxPolicy: request.sandboxPolicy ?? this.ctx.sandboxPolicy.resolve(),
     };
   }
 
   private argv(command: string): readonly string[] {
-    return [this.executable, "--noprofile", "--norc", "-c", command];
+    return [this.executable, "--login", "-c", command];
   }
 
   private guardedArgv(command: string, mode: ConfinedSandboxMode): readonly string[] {

@@ -495,7 +495,7 @@ DWORD launch_guarded(int argc, wchar_t** argv) {
       nullptr,
       nullptr,
       TRUE,
-      CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
+      CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
       nullptr,
       nullptr,
       &startup,
@@ -549,10 +549,26 @@ DWORD launch_guarded(int argc, wchar_t** argv) {
   }
 }
 
+// DSH launches the guard as a console app from a process that usually has no
+// console of its own. In that case Windows allocates a brand-new console
+// window, which flashes on screen for every restricted bash call. Hide only a
+// console that belongs exclusively to this process; never hide a console we
+// share with the user's terminal.
+void hide_private_console_window() noexcept {
+  DWORD process_list[2]{};
+  const DWORD count = GetConsoleProcessList(process_list, 2);
+  if (count == 1) {
+    if (HWND console = GetConsoleWindow(); console != nullptr) {
+      ShowWindow(console, SW_HIDE);
+    }
+  }
+}
+
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
   SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+  hide_private_console_window();
   try {
     return static_cast<int>(launch_guarded(argc, argv));
   } catch (const GuardFailure& error) {
