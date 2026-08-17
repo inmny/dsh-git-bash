@@ -277,7 +277,7 @@ export class GitBashExecutor extends LocalBashExecutor {
   }
 
   private argv(command: string): readonly string[] {
-    return [this.executable, "--noprofile", "--norc", "-c", command];
+    return [this.executable, "--login", "-c", command];
   }
 
   private guardedArgv(command: string, mode: ConfinedSandboxMode): readonly string[] {
