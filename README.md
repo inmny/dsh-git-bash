@@ -25,7 +25,7 @@ Web 界面中的 Bash 工具行可以展开查看 command、cwd、stdout/stderr 
 从 npm 安装固定版本到 Web profile：
 
 ```sh
-dsh plugin --profile web add dsh-plugin-git-bash@0.3.0
+dsh plugin --profile web add dsh-plugin-git-bash@0.3.1
 ```
 
 更新现有安装时使用同一条命令。安装完成后重启 `dsh web`，让 Host 和浏览器 client 同时加载新版本，然后新建会话。

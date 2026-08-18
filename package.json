@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-git-bash",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Use Git for Windows Bash as the default DSH shell with restricted-mode support",
   "keywords": [
     "deepseek-harness",
