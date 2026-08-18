@@ -85,7 +85,7 @@ dsh web
 
 - Windows x64
 - Node.js 24 或更高版本
-- DSH `0.1.0-rc.6`
+- DSH `0.1.0-rc.7`
 - Git for Windows x64
 
 npm 包包含预编译的 `msys-token-guard.exe` 和 `msys-token-guard-hook.dll`，普通安装不需要 Visual Studio 或 CMake。当前 native guard 仅支持 `win32-x64`；其他架构在受限模式下返回 `SANDBOX_UNAVAILABLE`，不会降级到未隔离执行。

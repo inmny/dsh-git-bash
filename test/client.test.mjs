@@ -111,6 +111,22 @@ function registerCompatRow(plugin, options = {}) {
   const effects = [];
   const settings = options.settings ?? createSettingsScope();
   const selectedDirectory = options.selectedDirectory ?? "D:\\Apps\\Git";
+  let pluginSettingsSnapshot = {
+    loaded: true,
+    namespaces: options.settingsNamespaces ?? ["shell"],
+  };
+  const pluginSettingsListeners = new Set();
+  const configurablePlugins = {
+    getSnapshot: () => pluginSettingsSnapshot,
+    subscribe(listener) {
+      pluginSettingsListeners.add(listener);
+      return () => pluginSettingsListeners.delete(listener);
+    },
+    set(snapshot) {
+      pluginSettingsSnapshot = snapshot;
+      for (const listener of [...pluginSettingsListeners]) listener();
+    },
+  };
   let pickCount = 0;
   const ctx = {
     effect(callback) {
@@ -143,17 +159,29 @@ function registerCompatRow(plugin, options = {}) {
     },
     slots: {
       entries(name) {
-        if (name !== "tool.call.toolview") return [];
-        return [{
-          component: OriginalBashRow,
-          options: { key: "bash", priority: 0 },
-        }];
+        if (name === "settings.plugins.tab") {
+          return [{
+            options: { id: "configurable" },
+            inject: () => ({ hooks: { configurablePlugins } }),
+          }];
+        }
+        if (name === "tool.call.toolview") {
+          return [{
+            component: OriginalBashRow,
+            options: { key: "bash", priority: 0 },
+          }];
+        }
+        return [];
       },
       inject(name, callback) {
         assert.ok(["tool.call.toolview", "settings.plugin.item"].includes(name));
         return callback();
       },
       register(registrationOptions, component) {
+        if (registrationOptions.name === "settings.plugin.item"
+          && registrationOptions.key === undefined) {
+          throw new Error(`keyed slot "${registrationOptions.name}" requires options.key`);
+        }
         const registration = { options: registrationOptions, component };
         registrations.push(registration);
         return () => {};
@@ -172,6 +200,7 @@ function registerCompatRow(plugin, options = {}) {
     registration,
     settingsRegistration,
     settings,
+    configurablePlugins,
     get pickCount() {
       return pickCount;
     },
@@ -265,8 +294,8 @@ test("client bundle registers and operates the Git Bash settings card", async ()
   const { settingsRegistration } = harness;
   assert.deepEqual(json(settingsRegistration.options), {
     name: "settings.plugin.item",
-    id: "git-bash",
-    order: 5,
+    key: "shell",
+    priority: -100,
     locale: "git-bash.settings",
   });
 
@@ -318,6 +347,19 @@ test("client bundle registers and operates the Git Bash settings card", async ()
   );
   await resetSave.props.onClick();
   assert.deepEqual(harness.settings.writes[1], { op: "unset", field: "executable" });
+});
+
+test("client bundle deduplicates shadowed settings namespaces", () => {
+  const { plugin } = loadClient();
+  const harness = registerCompatRow(plugin, {
+    settingsNamespaces: ["shell", "shell", "agent-loop"],
+  });
+
+  assert.deepEqual(json(harness.configurablePlugins.getSnapshot()), {
+    loaded: true,
+    namespaces: ["shell", "agent-loop"],
+  });
+  harness.dispose();
 });
 
 test("settings card can reset an invalid stored executable", async () => {

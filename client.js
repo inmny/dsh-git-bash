@@ -15,6 +15,7 @@ window.__ModuleLoader__.load({
 
     const SLOT = "tool.call.toolview";
     const SETTINGS_SLOT = "settings.plugin.item";
+    const SETTINGS_TAB_SLOT = "settings.plugins.tab";
     const SETTINGS_NAMESPACE = "shell";
     const LOCALE_NAMESPACE = "git-bash.settings";
     const PRIORITY = -100;
@@ -589,6 +590,23 @@ window.__ModuleLoader__.load({
       ) : null);
     }
 
+    function installSettingsNamespaceDedupe(ctx) {
+      const configurableTab = ctx.slots.entries(SETTINGS_TAB_SLOT)
+        .find((entry) => entry.options.id === "configurable");
+      const store = configurableTab.inject().hooks.configurablePlugins;
+      const dedupe = () => {
+        const snapshot = store.getSnapshot();
+        const namespaces = [...new Set(snapshot.namespaces)];
+        if (namespaces.length === snapshot.namespaces.length) return;
+        store.set({ ...snapshot, namespaces });
+      };
+      ctx.effect(() => {
+        const dispose = store.subscribe(dedupe);
+        dedupe();
+        return dispose;
+      }, "git-bash: deduplicate shadowed settings namespaces");
+    }
+
     function apply(ctx) {
       ctx.effect(() => {
         const disposeCommandStyle = installCommandWrapStyle();
@@ -602,11 +620,13 @@ window.__ModuleLoader__.load({
       const t = ctx.locale.bind(LOCALE_NAMESPACE);
       ctx.effect(() => ctx.locale.register(LOCALE_NAMESPACE, settingsLocales),
         "git-bash: settings dictionaries");
+      // DSH rc.7 builds this directory from raw keyed entries, including shadowed cards.
+      installSettingsNamespaceDedupe(ctx);
       const scope = ctx.settingsScope.bind({ namespace: SETTINGS_NAMESPACE });
       ctx.slots.inject(SETTINGS_SLOT, () => ctx.slots.register({
         name: SETTINGS_SLOT,
-        id: "git-bash",
-        order: 5,
+        key: SETTINGS_NAMESPACE,
+        priority: PRIORITY,
         locale: LOCALE_NAMESPACE,
         inject: () => ({
           scope,
