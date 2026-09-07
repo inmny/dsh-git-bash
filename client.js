@@ -591,19 +591,32 @@ window.__ModuleLoader__.load({
     }
 
     function installSettingsNamespaceDedupe(ctx) {
-      const configurableTab = ctx.slots.entries(SETTINGS_TAB_SLOT)
-        .find((entry) => entry.options.id === "configurable");
-      const store = configurableTab.inject().hooks.configurablePlugins;
-      const dedupe = () => {
-        const snapshot = store.getSnapshot();
-        const namespaces = [...new Set(snapshot.namespaces)];
-        if (namespaces.length === snapshot.namespaces.length) return;
-        store.set({ ...snapshot, namespaces });
+      let stop = () => {};
+      const install = () => {
+        const configurableTab = ctx.slots.entries(SETTINGS_TAB_SLOT)
+          .find((entry) => entry.options.id === "configurable");
+        if (configurableTab === undefined) return false;
+        const store = configurableTab.inject().hooks.configurablePlugins;
+        if (store === undefined) return false;
+        const dedupe = () => {
+          const snapshot = store.getSnapshot();
+          const namespaces = [...new Set(snapshot.namespaces)];
+          if (namespaces.length === snapshot.namespaces.length) return;
+          store.set({ ...snapshot, namespaces });
+        };
+        stop = store.subscribe(dedupe);
+        dedupe();
+        return true;
       };
       ctx.effect(() => {
-        const dispose = store.subscribe(dedupe);
-        dedupe();
-        return dispose;
+        if (install()) return stop;
+        const off = ctx.slots.subscribe(SETTINGS_TAB_SLOT, () => {
+          if (install()) off();
+        });
+        return () => {
+          off();
+          stop();
+        };
       }, "git-bash: deduplicate shadowed settings namespaces");
     }
 
@@ -630,7 +643,7 @@ window.__ModuleLoader__.load({
         locale: LOCALE_NAMESPACE,
         inject: () => ({
           scope,
-          pickDirectory: () => ctx.workspaces.pickDirectory(),
+          pickDirectory: () => ctx.uiWorkspace.pickDirectory(),
           t,
         }),
       }, GitBashSettingsCard));
@@ -666,7 +679,7 @@ window.__ModuleLoader__.load({
       "settingsScope",
       "connection",
       "remote",
-      "workspaces",
+      "uiWorkspace",
     ];
     module.exports = {
       apply,
