@@ -633,7 +633,8 @@ window.__ModuleLoader__.load({
       const t = ctx.locale.bind(LOCALE_NAMESPACE);
       ctx.effect(() => ctx.locale.register(LOCALE_NAMESPACE, settingsLocales),
         "git-bash: settings dictionaries");
-      // DSH rc.7 builds this directory from raw keyed entries, including shadowed cards.
+      // The configurable settings tab collects namespaces from raw keyed entries, so
+      // shadowed cards (same key, different priority) yield duplicate namespaces.
       installSettingsNamespaceDedupe(ctx);
       const scope = ctx.settingsScope.bind({ namespace: SETTINGS_NAMESPACE });
       ctx.slots.inject(SETTINGS_SLOT, () => ctx.slots.register({
