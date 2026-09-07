@@ -128,6 +128,12 @@ function registerCompatRow(plugin, options = {}) {
     },
   };
   let pickCount = 0;
+  const configurableTabEntry = {
+    options: { id: "configurable" },
+    inject: () => ({ hooks: { configurablePlugins } }),
+  };
+  let tabDeclared = options.deferConfigurableTab !== true;
+  const tabListeners = new Set();
   const ctx = {
     effect(callback) {
       const dispose = callback();
@@ -160,10 +166,7 @@ function registerCompatRow(plugin, options = {}) {
     slots: {
       entries(name) {
         if (name === "settings.plugins.tab") {
-          return [{
-            options: { id: "configurable" },
-            inject: () => ({ hooks: { configurablePlugins } }),
-          }];
+          return tabDeclared ? [configurableTabEntry] : [];
         }
         if (name === "tool.call.toolview") {
           return [{
@@ -172,6 +175,11 @@ function registerCompatRow(plugin, options = {}) {
           }];
         }
         return [];
+      },
+      subscribe(name, listener) {
+        assert.equal(name, "settings.plugins.tab");
+        tabListeners.add(listener);
+        return () => tabListeners.delete(listener);
       },
       inject(name, callback) {
         assert.ok(["tool.call.toolview", "settings.plugin.item"].includes(name));
@@ -203,6 +211,13 @@ function registerCompatRow(plugin, options = {}) {
     configurablePlugins,
     get pickCount() {
       return pickCount;
+    },
+    get tabListenerCount() {
+      return tabListeners.size;
+    },
+    declareConfigurableTab() {
+      tabDeclared = true;
+      for (const listener of [...tabListeners]) listener();
     },
     dispose() {
       for (const dispose of effects.reverse()) dispose();
@@ -360,6 +375,43 @@ test("client bundle deduplicates shadowed settings namespaces", () => {
     namespaces: ["shell", "agent-loop"],
   });
   harness.dispose();
+});
+
+test("client bundle deduplicates namespaces once the configurable tab registers", () => {
+  const { plugin } = loadClient();
+  const harness = registerCompatRow(plugin, {
+    settingsNamespaces: ["shell", "shell"],
+    deferConfigurableTab: true,
+  });
+
+  assert.deepEqual(json(harness.configurablePlugins.getSnapshot()), {
+    loaded: true,
+    namespaces: ["shell", "shell"],
+  });
+
+  harness.declareConfigurableTab();
+  assert.deepEqual(json(harness.configurablePlugins.getSnapshot()), {
+    loaded: true,
+    namespaces: ["shell"],
+  });
+  assert.equal(harness.tabListenerCount, 0);
+  harness.dispose();
+});
+
+test("client bundle stops watching for the configurable tab after disposal", () => {
+  const { plugin } = loadClient();
+  const harness = registerCompatRow(plugin, {
+    settingsNamespaces: ["shell", "shell"],
+    deferConfigurableTab: true,
+  });
+
+  harness.dispose();
+  harness.declareConfigurableTab();
+  assert.equal(harness.tabListenerCount, 0);
+  assert.deepEqual(json(harness.configurablePlugins.getSnapshot()), {
+    loaded: true,
+    namespaces: ["shell", "shell"],
+  });
 });
 
 test("settings card can reset an invalid stored executable", async () => {
