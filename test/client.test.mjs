@@ -601,7 +601,7 @@ test("client bundle scopes command wrapping and settings styles", () => {
 
 test("package declares the browser bundle for DSH discovery", () => {
   const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-  assert.equal(pkg.version, "0.3.2");
+  assert.equal(pkg.version, "0.3.3");
   assert.equal(pkg.exports["./client"], "./client.js");
   assert.ok(pkg.files.includes("client.js"));
   assert.deepEqual(pkg.dsh.client, {
