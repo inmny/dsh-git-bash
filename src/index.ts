@@ -23,6 +23,7 @@ import {
   type ShellRunResult,
 } from "@deepseek-ai/dsh-shell";
 import z from "@deepseek-ai/schemastery";
+import { spawnSync } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -52,6 +53,29 @@ const GUARD_FAILURE_RULE: RunnerFailureRule = {
   allowedExitCodes: [125],
   fatalSignatures: ["msys-token-guard:"],
 };
+// The guard's child-token setup fails when the restricted DACL (inherited from
+// the server token's default DACL) offers no usable ordinary SID to the guard.
+const SERVER_DACL_FAILURE_SIGNATURE = "openprocesstoken(child default dacl)";
+
+// DSH derives every restricted token from the server's own process token, and
+// the restricted DACL starts as a copy of the server's default DACL. Servers
+// started outside MSYS2 can carry a DACL without the user SID, which blocks
+// the guard's workspace-write child-token setup (exit 125). Run the guard
+// helper once per server process to stamp the standard DACL shape — the same
+// normalization starting `dsh web` from Git Bash gets for free.
+function normalizeServerDefaultDacl(): boolean {
+  if (process.platform !== "win32" || process.arch !== "x64") return false;
+  let result;
+  try {
+    result = spawnSync(GUARD_EXECUTABLE, ["--normalize-server-dacl"], {
+      timeout: 10_000,
+      windowsHide: true,
+    });
+  } catch {
+    return false;
+  }
+  return result.status === 0;
+}
 
 export interface Config extends LocalBashConfig {
   // Absolute Git for Windows bash.exe path. Auto-detected when omitted.
@@ -166,12 +190,22 @@ function classifyDenial(result: ShellRunResult, signatures: readonly string[]): 
   return matchesSignature(result.exitCode, result.stderr.text, signatures);
 }
 
+// Turn the guard's bare DACL failure line into an actionable message: the
+// automatic normalization ran (or was skipped) and the server still serves
+// restricted tokens without ordinary user coverage.
+export function describeGuardFailure(detail: string): string {
+  if (!detail.toLowerCase().includes(SERVER_DACL_FAILURE_SIGNATURE)) return detail;
+  return detail + " (git-bash: the DSH server process token's default DACL lacks the user SID,"
+    + " so the guard cannot prepare the restricted child token. Start `dsh web` from Git Bash"
+    + " so MSYS2 restores the standard DACL shape, and see"
+    + " https://github.com/inmny/dsh-git-bash/issues/4)";
+}
+
 function classifyRunnerFailure(
   exitCode: number | null,
   stderr: string,
   rules: readonly RunnerFailureRule[],
-): RunnerFailureMatch | undefined {
-  if (exitCode === null || exitCode === 0) return undefined;
+): RunnerFailureMatch | undefined {  if (exitCode === null || exitCode === 0) return undefined;
   const lines = stderr.split(/\r?\n/);
   for (const rule of rules) {
     if (rule.allowedExitCodes !== undefined && !rule.allowedExitCodes.includes(exitCode)) {
@@ -300,11 +334,20 @@ export class GitBashExecutor extends LocalBashExecutor {
   }
 
   private confine(command: string, policy: SandboxPolicy): ConfinedArgv {
+    this.ensureServerDaclNormalized();
     const confined = this.ctx.sandbox.confine(this.guardedArgv(command, policy.mode), policy);
     return {
       ...confined,
       runnerFailureRules: [...confined.runnerFailureRules, GUARD_FAILURE_RULE],
     };
+  }
+
+  private serverDaclNormalized = false;
+
+  private ensureServerDaclNormalized(): void {
+    if (this.serverDaclNormalized) return;
+    this.serverDaclNormalized = true;
+    normalizeServerDefaultDacl();
   }
 
   override async run(spec: ShellExecSpec): Promise<ShellRunResult> {
@@ -335,7 +378,7 @@ export class GitBashExecutor extends LocalBashExecutor {
       confined.runnerFailureRules,
     );
     if (runnerFailure !== undefined) {
-      throw new SandboxUnavailableError(mode, runnerFailure.detail);
+      throw new SandboxUnavailableError(mode, describeGuardFailure(runnerFailure.detail));
     }
     return {
       ...result,

@@ -185,6 +185,89 @@ void verify_token_invariants(HANDLE token, const std::vector<std::wstring>* expe
   }
 }
 
+bool default_dacl_covers_user(HANDLE token) {
+  const auto user_buffer = token_information(token, TokenUser);
+  const auto* user = reinterpret_cast<const TOKEN_USER*>(user_buffer.data());
+  if (user->User.Sid == nullptr || IsValidSid(user->User.Sid) == FALSE) {
+    fail_invariant("server token carries an invalid user SID");
+  }
+  const auto dacl_buffer = token_information(token, TokenDefaultDacl);
+  const auto* info = reinterpret_cast<const TOKEN_DEFAULT_DACL*>(dacl_buffer.data());
+  PACL dacl = info->DefaultDacl;
+  if (dacl == nullptr || IsValidAcl(dacl) == FALSE) {
+    fail_invariant("server token default DACL is missing or invalid");
+  }
+
+  ACL_SIZE_INFORMATION size_info{};
+  if (GetAclInformation(dacl, &size_info, sizeof(size_info), AclSizeInformation) == FALSE) {
+    fail("GetAclInformation(server default DACL)");
+  }
+  const ACCESS_MASK required = TOKEN_QUERY | TOKEN_ADJUST_DEFAULT;
+  for (DWORD ace_index = 0; ace_index < size_info.AceCount; ++ace_index) {
+    void* raw_ace = nullptr;
+    if (GetAce(dacl, ace_index, &raw_ace) == FALSE) fail("GetAce(server default DACL)");
+    const auto* header = static_cast<const ACE_HEADER*>(raw_ace);
+    if (header->AceType != ACCESS_ALLOWED_ACE_TYPE) continue;
+
+    const auto* ace = static_cast<const ACCESS_ALLOWED_ACE*>(raw_ace);
+    const bool covers = (ace->Mask & GENERIC_ALL) != 0 || (ace->Mask & required) == required;
+    if (!covers) continue;
+    PSID ace_sid = const_cast<DWORD*>(&ace->SidStart);
+    if (IsValidSid(ace_sid) == FALSE) fail_invariant("invalid SID in server token default DACL");
+    if (EqualSid(ace_sid, user->User.Sid) != FALSE) return true;
+  }
+  return false;
+}
+
+// DSH derives every restricted token from the server's own process token, and
+// the restricted DACL starts as a copy of the server's default DACL. Servers
+// started outside MSYS2 can carry a DACL without the user SID, which blocks
+// the guard's workspace-write child-token setup. Stamp the standard shape:
+// an explicit full-access ACE for the user SID, the same normalization the
+// MSYS2 runtime applies to tokens of its own processes. Runs once per server
+// process on an unrestricted token; exits 0 either way.
+int normalize_server_default_dacl() {
+  UniqueHandle token = open_process_token(
+      GetCurrentProcess(),
+      TOKEN_QUERY | TOKEN_ADJUST_DEFAULT,
+      "OpenProcessToken(server default DACL)");
+  if (default_dacl_covers_user(token.get())) {
+    std::fprintf(stdout, "server-dacl=ok\n");
+    return ERROR_SUCCESS;
+  }
+
+  const auto user_buffer = token_information(token.get(), TokenUser);
+  const auto* user = reinterpret_cast<const TOKEN_USER*>(user_buffer.data());
+  const auto dacl_buffer = token_information(token.get(), TokenDefaultDacl);
+  const auto* info = reinterpret_cast<const TOKEN_DEFAULT_DACL*>(dacl_buffer.data());
+
+  EXPLICIT_ACCESSW grant{};
+  grant.grfAccessPermissions = FILE_ALL_ACCESS;
+  grant.grfAccessMode = GRANT_ACCESS;
+  grant.grfInheritance = NO_INHERITANCE;
+  grant.Trustee.pMultipleTrustee = nullptr;
+  grant.Trustee.MultipleTrusteeOperation = NO_MULTIPLE_TRUSTEE;
+  grant.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+  grant.Trustee.TrusteeType = TRUSTEE_IS_USER;
+  grant.Trustee.ptstrName = static_cast<LPWSTR>(user->User.Sid);
+
+  PACL extended_dacl = nullptr;
+  DWORD status = SetEntriesInAclW(1, &grant, info->DefaultDacl, &extended_dacl);
+  if (status != ERROR_SUCCESS) fail("SetEntriesInAclW(server default DACL)", status);
+  LocalAllocation extended_owner(extended_dacl);
+
+  TOKEN_DEFAULT_DACL updated{};
+  updated.DefaultDacl = extended_dacl;
+  if (SetTokenInformation(token.get(), TokenDefaultDacl, &updated, sizeof(updated)) == FALSE) {
+    fail("SetTokenInformation(server default DACL)");
+  }
+  if (!default_dacl_covers_user(token.get())) {
+    fail_invariant("server default DACL lacks user coverage after the grant");
+  }
+  std::fprintf(stdout, "server-dacl=normalized\n");
+  return ERROR_SUCCESS;
+}
+
 void grant_logon_sid_to_default_dacl(HANDLE process) {
   UniqueHandle token = open_process_token(
       process,
@@ -427,6 +510,9 @@ std::string hook_library_path() {
 }
 
 DWORD launch_guarded(int argc, wchar_t** argv) {
+  if (argc == 2 && std::wcscmp(argv[1], L"--normalize-server-dacl") == 0) {
+    return normalize_server_default_dacl();
+  }
   if (argc == 2 && std::wcscmp(argv[1], L"--probe-current-token") == 0) {
     auto token = open_process_token(GetCurrentProcess(), TOKEN_QUERY, "OpenProcessToken(probe)");
     verify_token_invariants(token.get());

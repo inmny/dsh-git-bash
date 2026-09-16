@@ -6,7 +6,7 @@ import { Context } from "@deepseek-ai/cordis";
 import { LocalBashExecutor } from "@deepseek-ai/dsh-bash-local";
 import { LocalSandboxProvider } from "@deepseek-ai/dsh-sandbox-local";
 import { LocalSubprocessRuntime } from "@deepseek-ai/dsh-subprocess-local";
-import { Config, GitBashExecutor, resolveGitBashPath } from "../lib/index.js";
+import { Config, describeGuardFailure, GitBashExecutor, resolveGitBashPath } from "../lib/index.js";
 
 const LOCAL_BASH_CONFIG = LocalBashExecutor.Config;
 const CAN_RUN_NATIVE_GUARD = process.platform === "win32" && process.arch === "x64";
@@ -168,6 +168,18 @@ test("keeps the settings repair path available when auto-discovery is unavailabl
     else process.env.DSH_GIT_BASH_PATH = previous;
     await dispose(ctx);
   }
+});
+
+test("enriches the guard DACL failure with an actionable hint", () => {
+  const bare = "msys-token-guard: OpenProcessToken(child default DACL) failed (Win32 5)";
+  const enriched = describeGuardFailure(bare);
+  assert.match(enriched, /^msys-token-guard: OpenProcessToken\(child default DACL\) failed \(Win32 5\)/);
+  assert.match(enriched, /default DACL lacks the user SID/);
+  assert.match(enriched, /Start `dsh web` from Git Bash/);
+  assert.match(enriched, /issues\/4\)$/);
+
+  const unrelated = "msys-token-guard: GetFileAttributesW(hook DLL) failed (Win32 3)";
+  assert.equal(describeGuardFailure(unrelated), unrelated);
 });
 
 test("runs foreground commands directly in danger-full-access", async () => {
