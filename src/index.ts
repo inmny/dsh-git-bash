@@ -86,12 +86,20 @@ const LOCAL_BASH_CONFIG = LocalBashExecutor.Config;
 
 type ResolvedGitBashConfig = Required<Omit<Config, "cwd">> & Pick<Config, "cwd">;
 
-interface GitBashSettingsService {
-  register(
-    namespace: typeof SHELL_SETTINGS_NAMESPACE,
-    schema: z<Config>,
-    options: { base: Config; validate: (value: Config) => void },
-  ): { get(): Config };
+interface SettingsSectionHooks<T> {
+  setSource(current: () => T): void;
+  onChange(): void;
+  validate?(value: T): void;
+}
+
+interface SettingsProviderService {
+  installSection<const Namespace extends string, T>(
+    owner: Context,
+    ns: Namespace,
+    schema: z<T>,
+    entry: T,
+    hooks: SettingsSectionHooks<T>,
+  ): void;
 }
 
 // Keep the field schema permissive enough to render a recovery card for a
@@ -262,23 +270,21 @@ export class GitBashExecutor extends LocalBashExecutor {
 
   constructor(ctx: Context, config: Config) {
     // Keep the inherited process mechanics while replacing its fixed settings
-    // registration with the extended, executable-aware section below.
+    // registration with the extended, executable-aware section below. The
+    // base registers inside an isolated settings realm so only the extended
+    // section is visible to the real settings provider.
     super(ctx.isolate("settings"), checkedCompositionConfig(config));
     const entry = config as ResolvedGitBashConfig;
     this.configSource = () => entry;
     ctx.inject(["settings"], (settingsCtx) => {
-      const settings = settingsCtx.get("settings", true) as GitBashSettingsService;
-      const scope = settings.register(SHELL_SETTINGS_NAMESPACE, Config, {
-        base: entry,
+      const settings = settingsCtx.get("settings", true) as SettingsProviderService;
+      settings.installSection(ctx, SHELL_SETTINGS_NAMESPACE, Config, entry, {
         validate: createSettingsValidator(),
-      });
-      this.configSource = () => scope.get() as ResolvedGitBashConfig;
-      settingsCtx.effect(
-        () => () => {
-          this.configSource = () => entry;
+        setSource: (current) => {
+          this.configSource = () => current() as ResolvedGitBashConfig;
         },
-        "git-bash: restore composition settings",
-      );
+        onChange: () => {},
+      });
     });
     this.mode = ctx.sandboxPolicy.defaultMode;
   }
@@ -333,9 +339,11 @@ export class GitBashExecutor extends LocalBashExecutor {
     return spec.sandboxPolicy;
   }
 
-  private confine(command: string, policy: SandboxPolicy): ConfinedArgv {
+  private async confine(command: string, policy: SandboxPolicy): Promise<ConfinedArgv> {
     this.ensureServerDaclNormalized();
-    const confined = this.ctx.sandbox.confine(this.guardedArgv(command, policy.mode), policy);
+    // The sandbox seam's confine() is async (Promise<ConfinedArgv>); await it
+    // before spreading so the runner-failure rules extend the resolved wrap.
+    const confined = await this.ctx.sandbox.confine(this.guardedArgv(command, policy.mode), policy);
     return {
       ...confined,
       runnerFailureRules: [...confined.runnerFailureRules, GUARD_FAILURE_RULE],
@@ -354,22 +362,27 @@ export class GitBashExecutor extends LocalBashExecutor {
     const policy = this.policy(spec);
     const { mode } = policy;
     if (mode === "danger-full-access") {
+      const { result } = await this.runArgv(spec, this.argv(spec.command));
       return {
-        ...await this.runArgv(spec, this.argv(spec.command)),
+        ...result,
         sandbox: { mode, denied: false },
       };
     }
 
-    const confined = this.confine(spec.command, { ...policy, mode });
+    const confined = await this.confine(spec.command, { ...policy, mode });
     let result: ShellRunResult;
+    let spawnRequested: boolean;
     try {
-      result = await this.runArgv(spec, confined.argv);
+      ({ result, spawnRequested } = await this.runArgv(spec, confined.argv));
     } catch (error) {
       if (spec.signal?.aborted === true) spec.signal.throwIfAborted();
       if (isRunnerSpawnFailure(error, confined.argv[0], spec.workdir)) {
         throw new SandboxUnavailableError(mode, String(error));
       }
       throw error;
+    }
+    if (!spawnRequested) {
+      return { ...result, sandbox: { mode, denied: false } };
     }
 
     const runnerFailure = classifyRunnerFailure(
@@ -390,14 +403,14 @@ export class GitBashExecutor extends LocalBashExecutor {
     };
   }
 
-  override start(spec: ShellExecSpec): ShellProcess {
+  override async start(spec: ShellExecSpec): Promise<ShellProcess> {
     const policy = this.policy(spec);
     const { mode } = policy;
     if (mode === "danger-full-access") {
       return this.startArgv(spec, this.argv(spec.command));
     }
 
-    const confined = this.confine(spec.command, { ...policy, mode });
+    const confined = await this.confine(spec.command, { ...policy, mode });
     let proc: ShellProcess;
     try {
       proc = this.startArgv(spec, confined.argv);

@@ -50,7 +50,10 @@ export function apply(ctx: Context): void {
   };
 
   ctx.effect(() => {
-    const stopCreated = ctx.on("agent/created", ({ agent }) => install(agent));
+    const stopCreated = ctx.on("agent/created", ({ agent }) => {
+      install(agent);
+      return undefined;
+    });
     const stopDisposed = ctx.on("agent/disposed", ({ agent }) => installed.delete(agent));
     for (const agent of ctx.agents.list()) install(agent);
 

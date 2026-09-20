@@ -71,31 +71,24 @@ test("reads Git Bash executable changes from the live shell settings scope", asy
     await ctx.plugin({
       apply(settingsCtx) {
         settingsCtx.provide("settings", {
-          register(namespace, schema, options) {
+          installSection(owner, namespace, schema, entry, hooks) {
             registrationCount += 1;
             assert.equal(String(namespace), "shell");
-            const listeners = new Set();
             let section = { executable: initialInvalid };
-            current = schema({ ...options.base, ...section });
-            options.validate(current);
-            const commit = async (nextSection) => {
-              const next = schema({ ...options.base, ...nextSection });
-              options.validate(next);
-              const previous = current;
-              section = nextSection;
-              current = next;
-              for (const listener of listeners) listener(current, previous);
-            };
+            const resolve = (nextSection) => schema({ ...entry, ...nextSection });
+            current = resolve(section);
+            hooks.validate?.(current);
+            hooks.setSource(() => current);
+            hooks.onChange();
             settingsScope = {
-              get: () => current,
-              watch(callback) {
-                listeners.add(callback);
-                return () => listeners.delete(callback);
+              update: async (patch) => {
+                const next = resolve({ ...section, ...patch });
+                hooks.validate?.(next);
+                section = { ...section, ...patch };
+                current = next;
+                hooks.onChange();
               },
-              update: (patch) => commit({ ...section, ...patch }),
-              replace: (replacement) => commit(replacement),
             };
-            return settingsScope;
           },
         });
       },
@@ -206,7 +199,7 @@ test("runs foreground commands directly in danger-full-access", async () => {
 test("runs background commands directly through Git Bash", async () => {
   const { ctx, executor } = createExecutor();
   try {
-    const process = executor.start(executor.resolve({
+    const process = await executor.start(executor.resolve({
       command: "printf '%s' \"$MSYSTEM\"",
     }));
     await process.done;
@@ -303,7 +296,7 @@ test("workspace-write allows workspace writes and denies sibling writes", { skip
 test("reports sandbox facts for restricted background processes", { skip: !CAN_RUN_NATIVE_GUARD }, async () => {
   const { ctx, executor } = createExecutor("read-only");
   try {
-    const process = executor.start(executor.resolve({
+    const process = await executor.start(executor.resolve({
       command: "printf guarded-background",
     }));
     await process.done;
@@ -394,7 +387,7 @@ test("aborts the complete restricted foreground process tree", { skip: !CAN_RUN_
 test("kills the complete restricted background process tree", { skip: !CAN_RUN_NATIVE_GUARD }, async () => {
   const { ctx, executor } = createExecutor("read-only");
   try {
-    const process = executor.start(executor.resolve({ command: "sleep 10" }));
+    const process = await executor.start(executor.resolve({ command: "sleep 10" }));
     assert.equal(process.status, "running");
     assert.equal(process.kill(), true);
     await process.done;
